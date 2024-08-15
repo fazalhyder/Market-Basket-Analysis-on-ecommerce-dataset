@@ -1,0 +1,678 @@
+---
+title: "Project"
+author: "fazal hyder and alisha surani"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# ANALYSIS ON ONLINE RETAIL TRASACTIONAL DATABASE
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(visdat)
+library(tidyr)
+library(naniar)
+library(arules)
+library(readxl)
+library(cluster)
+
+
+dataset <- read_excel("Dataset 15-Online Retail.xlsx")
+
+str(dataset)
+
+
+```
+## Data Cleaning
+
+```{r}
+
+
+
+vis_miss(dataset)
+
+```
+
+```{r}
+head(dataset,9)
+```
+
+```{r}
+
+#summary of the dataset
+summary(dataset)
+```
+
+```{r}
+ggplot(dataset, aes(x = Country, y = UnitPrice)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Unit Price Distribution by Country", x = "Country", y = "Unit Price")
+
+```
+
+we can observe that UK has the highest unit price
+```{r}
+# boxplot for UnitPrice
+ggplot(dataset, aes(x = "", y = UnitPrice)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(y = "Unit Price", title = "Boxplot of Unit Price") +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+As we can see there are some outliers in the unit price which is way out of range so we will normalize the data by droping those na values which are only two observations which are over 2500 so lets keep our range from 0-10000
+
+```{r}
+cleaned_data <- dataset %>%filter(UnitPrice <= 2500)
+cleaned_data <- cleaned_data %>%filter(UnitPrice > 0)
+cleaned_data <- cleaned_data %>%filter(Quantity <= 10000)
+cleaned_data <- cleaned_data %>%filter(Quantity > 0)
+
+
+
+
+head(cleaned_data)
+
+
+```
+
+```{r}
+
+ggplot(cleaned_data, aes(x = Quantity, y = UnitPrice)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Relationship between Quantity and Unit Price", x = "Quantity", y = "Unit Price")
+
+```
+
+In the dataset, invoice numbers that start with the letter 'C' indicate cancellations or void tickets . To remove these, as well as any other entries that may start with a different letter, we  filter the dataset to only include rows where the InvoiceNo starts with a digit.
+
+```{r}
+
+cleaned_data <- cleaned_data %>%filter(!grepl("^[A-Za-z]", InvoiceNo))
+
+
+```
+
+Now lets take a look at different products in the dataset whose description is given in the dataset 
+
+```{r warning=FALSE}
+unique_descriptions <- cleaned_data %>%distinct(Description)
+
+
+print(unique_descriptions)
+
+```
+
+```{r}
+total_unique_descriptions <- n_distinct(cleaned_data$Description)
+
+print( total_unique_descriptions)
+```
+
+```{r}
+# Drop all rows with NA in the Description column
+cleaned_data <- cleaned_data %>%drop_na(Description)
+```
+
+
+
+```{r}
+
+
+
+
+#  to generate unique IDs
+generate_unique_id <- function(existing_ids) {
+  new_id <- sample(10000:99999, 1)
+  while(new_id %in% existing_ids) {
+    new_id <- sample(10000:99999, 1)
+  }
+  return(new_id)
+}
+
+# fill in missing CustomerIDs
+cleaned_data <- cleaned_data %>% 
+  mutate(CustomerID = ifelse(is.na(CustomerID), generate_unique_id(CustomerID), CustomerID))
+
+
+head(cleaned_data)
+```
+ 
+ 
+```{r}
+country_counts <- cleaned_data %>%
+  group_by(Country) %>%
+  summarise(Count = n())
+
+
+print(country_counts)
+```
+united kingdom has the highest number of recorded transactions in our data set  we can use united kingdoms transaction for further analysis as it has enough records to  balance the bias in the data which is 18486
+
+Now lets check the customer base
+
+```{r}
+
+
+# Group the data by Country and count the unique CustomerIDs
+unique_customers_by_country <- cleaned_data %>%
+  group_by(Country) %>%
+  summarise(UniqueCustomers = n_distinct(CustomerID))
+
+# unique customer counts for each country
+print(unique_customers_by_country)
+
+```
+united kingdom clearly has the highest number of customers out of all the other countries in the dataset . 
+
+
+Once again lets check if we still have any missing records to further proceed with our research 
+
+```{r}
+vis_miss(cleaned_data)
+```
+
+As we can see our data set is cleaned and there no more na values or missing records we can proceed further for analysis of our data
+
+## Exploratory Data Analysis
+```{r}
+
+
+iqr_quantity <- IQR(cleaned_data$Quantity, na.rm = TRUE)
+
+
+Q1 <- quantile(cleaned_data$Quantity, 0.25, na.rm = TRUE)
+Q3 <- quantile(cleaned_data$Quantity, 0.75, na.rm = TRUE)
+
+lower_bound <- Q1 - 1.5 * iqr_quantity
+upper_bound <- Q3 + 1.5 * iqr_quantity
+
+
+cleaned_data <- cleaned_data %>%
+  filter(Quantity >= lower_bound & Quantity <= upper_bound)
+
+
+min_quantity <- min(cleaned_data$Quantity, na.rm = TRUE)
+max_quantity <- max(cleaned_data$Quantity, na.rm = TRUE)
+
+cat("The new range of Quantity after removing outliers is from", min_quantity, "to", max_quantity, "\n")
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+
+cleaned_data <- cleaned_data %>%
+  mutate(DayType = ifelse(weekdays(InvoiceDate) %in% c("Saturday", "Sunday"), "Weekend", "Weekday"))
+
+
+top_products <- cleaned_data %>%
+  group_by(Description) %>%
+  summarise(TotalQuantity = sum(Quantity, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(desc(TotalQuantity)) %>%
+  top_n(10, TotalQuantity) %>%
+  select(Description)
+
+top_product_sales <- cleaned_data %>%
+  filter(Description %in% top_products$Description)
+
+
+product_sales_comparison <- top_product_sales %>%
+  group_by(Description, DayType) %>%
+  summarise(TotalQuantity = sum(Quantity, na.rm = TRUE)) %>%
+  ungroup()
+
+
+ggplot(product_sales_comparison, aes(x = Description, y = TotalQuantity, fill = DayType)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Top Product Sales Comparison: Weekend vs Weekday",
+       x = "Product Description",
+       y = "Total Quantity Sold",
+       fill = "Day Type")
+
+
+```
+
+Let us analyse the highest number of times the product which has been sold
+
+```{r}
+library(forcats)
+
+description_counts <- cleaned_data %>%
+  count(Description, sort = TRUE) 
+
+
+top_n <- 30  # Adjust this number as needed
+
+ggplot(description_counts[1:top_n, ], aes(x = reorder(Description, n), y = n)) +
+  geom_col(fill = "lightblue") +
+  coord_flip() + 
+  theme_minimal() +
+  labs(x = "Description", y = "Frequency", title = paste("Top", top_n, "Most Frequent Products")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+
+```{r}
+ggplot(cleaned_data, aes(x = Country)) +
+  geom_bar(fill = "lightcoral") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Number of Transactions by Country", x = "Country", y = "Number of Transactions")
+
+```
+```{r}
+
+
+product_sales_by_country <- cleaned_data %>%
+  group_by(Country, Description) %>%
+  summarise(TotalSold = sum(Quantity, na.rm = TRUE), .groups = 'drop')
+
+top_product_by_country <- product_sales_by_country %>%
+  group_by(Country) %>%
+  top_n(1, TotalSold) %>%
+  ungroup()
+
+top_product_by_country
+
+
+
+```
+```{r}
+
+
+least_product_by_country <- product_sales_by_country %>%
+  group_by(Country) %>%
+  slice_min(order_by = TotalSold, n = 1) %>%
+  ungroup()
+
+least_product_by_country
+
+
+```
+
+
+
+
+
+
+```{r}
+
+
+
+sales_spain_uk <- cleaned_data %>%
+  filter(Country %in% c("Spain", "United Kingdom"))
+
+
+product_sales_spain_uk <- sales_spain_uk %>%
+  group_by(Country, Description) %>%
+  summarise(TotalSold = sum(Quantity, na.rm = TRUE), .groups = 'drop')
+
+
+least_product_spain_uk <- product_sales_spain_uk %>%
+  group_by(Country) %>%
+  slice_min(order_by = TotalSold, n = 1) %>%
+  ungroup()
+
+
+print(least_product_spain_uk)
+
+```
+
+```{r}
+#  the range of Quantity
+min_quantity <- min(cleaned_data$Quantity, na.rm = TRUE)
+max_quantity <- max(cleaned_data$Quantity, na.rm = TRUE)
+
+
+cat("The range of Quantity is from", min_quantity, "to", max_quantity, "\n")
+
+```
+ 
+ Now lets add some new variables to our cleaned dataset for deep insights . we can add varibables such as  'purchase_frequency' , 'season', 'totalprice' and also we can break down the time into date ,  month , year etc so that it can help us do any time series analysis in fututre.
+```{r}
+
+purchase_frequency <- cleaned_data %>%
+  group_by(CustomerID) %>%
+  summarise(PurchaseFrequency = n_distinct(InvoiceNo))
+cleaned_data <- merge(cleaned_data, purchase_frequency, by = "CustomerID")
+
+cleaned_data$Season <- cut(as.numeric(format(cleaned_data$InvoiceDate, "%m")), 
+                              breaks = c(1, 3, 6, 9, 12),
+                              labels = c("Winter", "Spring", "Summer", "Autumn"),
+                              include.lowest = TRUE)
+
+cleaned_data$totalprice <- cleaned_data$Quantity * cleaned_data$UnitPrice
+
+
+
+cleaned_data$Year <- format(cleaned_data$InvoiceDate, "%Y")
+cleaned_data$Month <- format(cleaned_data$InvoiceDate, "%m")
+cleaned_data$Day <- format(cleaned_data$InvoiceDate, "%d")
+cleaned_data$Hour <- format(cleaned_data$InvoiceDate, "%H")
+cleaned_data$Weekday <- weekdays(cleaned_data$InvoiceDate)
+
+
+
+
+
+head(cleaned_data,9)
+
+```
+ 
+ Now let us analyse which season has the highest sale
+```{r}
+season_sales <- cleaned_data %>%
+  group_by(Season) %>%
+  summarise(TotalSales = sum(totalprice, na.rm = TRUE))
+
+
+ggplot(season_sales, aes(x = Season, y = TotalSales, fill = Season)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Sales by Season", x = "Season", y = "Total Sales") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")  # For a more colorful graph
+
+
+
+```
+ 
+The above graph indicates that the dataset contains only the transaction history of the autumn season so we might not able to mine any seasonal analysis .  lets do the same analysis on the weekday
+```{r}
+weekday_sales <- cleaned_data %>%
+  group_by(Weekday) %>%
+  summarise(TotalSales = sum(totalprice, na.rm = TRUE))
+weekday_sales$Weekday <- reorder(weekday_sales$Weekday, weekday_sales$TotalSales)
+
+
+
+ggplot(weekday_sales, aes(x = Weekday, y = TotalSales, fill = Weekday)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Sales by each day", x = "day", y = "Total Sales") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")  # For a more colorful graph
+
+
+```
+ 
+  As we can see out of all the weekdays mondays has the highest amount of total sales . further we can analyze which hour has the highest sale on monday
+```{r}
+cleaned_data$Hour <- as.integer(format(cleaned_data$InvoiceDate, "%H"))
+cleaned_data$Weekday <- weekdays(cleaned_data$InvoiceDate)
+
+monday_sales <- cleaned_data %>%
+  filter(Weekday == "Monday") %>%
+  group_by(Hour) %>%
+  summarise(TotalSales = sum(totalprice, na.rm = TRUE))
+
+ggplot(monday_sales, aes(x = Hour, y = TotalSales, fill = as.factor(Hour))) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Sales by Hour on Monday", x = "Hour", y = "Total Sales") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Spectral")  # Optional for color
+
+
+
+```
+ 
+ We can see the 17 th hour has the highest amount of sale. now we can check for what are the products sold the most on mondays. 
+```{r}
+
+
+
+cleaned_data$Weekday <- weekdays(cleaned_data$InvoiceDate)
+
+
+monday_product_sales <- cleaned_data%>%
+  filter(Weekday == "Monday") %>%
+  group_by(Description) %>%
+  summarise(TotalSold = sum(Quantity, na.rm = TRUE)) %>%
+  arrange(desc(TotalSold))
+
+
+top_30_monday_products <- head(monday_product_sales, 30)
+
+
+top_30_monday_products
+
+```
+
+Now that we know what sells the most and where it sells  let us try to find patterns and association rules using Market Basket Analysis.
+
+
+## Market Basket analysis
+
+* Market Basket Analysis (MBA) is a data mining technique used to uncover the relationships between items in large datasets, typically in the context of shopping transactions.
+* MBA is used to analyze customer purchasing patterns by finding combinations of items that occur together frequently in transactions.
+* One of the most common algorithms used in MBA. It operates by identifying the frequent individual items in the database and extending them to larger itemsets as long as those itemsets appear sufficiently often in the database
+* It primarily uses rules to identify the likelihood of items being purchased together. These rules are defined with measures like support, confidence, and lift.
+* A higher support means the itemset is more common.
+* Confidence gives the probability of purchasing a particular item when another item is already bought. It's a measure of the strength of the association.
+* A lift greater than 1 indicates a positive relationship
+
+
+```{r warning=FALSE}
+
+
+transactions <- cleaned_data %>%
+  group_by(InvoiceNo) %>%
+  summarise(Products = list(Description))
+
+transactions <- as(transactions$Products, "transactions")
+
+```
+
+```{r message=FALSE, warning=FALSE}
+rules <- apriori(transactions,parameter = list(supp = 0.05, conf = 0.1))
+rules = apriori(transactions, parameter = list(support =0.05, confidence = 0.7, target = "rules"))
+rules
+
+inspect(head(sort(rules, by = "confidence"), 5))
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+rules <- apriori(transactions,parameter = list(supp = 0.05, conf = 0.1))
+
+inspect(head(sort(rules, by = "confidence"), 10))
+
+```
+
+1. **{HAND WARMER BIRD DESIGN} => {HAND WARMER OWL DESIGN}**
+   - This rule has a very high confidence of 83.33%, meaning that when customers buy Hand Warmers with a Bird Design, there's a strong likelihood they will also buy Hand Warmers with an Owl Design. The lift of 8.44 suggests that Hand Warmers with an Owl Design are over 8 times more likely to be purchased by customers who buy Hand Warmers with a Bird Design than by the average customer, indicating a strong positive relationship between the two products.
+
+2. **{CLASSIC BICYCLE CLIPS} => {BICYCLE PUNCTURE REPAIR KIT}**
+   - With a confidence of 78.95%, customers purchasing Classic Bicycle Clips are also very likely to purchase a Bicycle Puncture Repair Kit. The lift of 8.64 indicates that customers who buy Classic Bicycle Clips are over 8 times more likely to buy a Bicycle Puncture Repair Kit than the average customer.
+
+3. **{HAND WARMER SCOTTY DOG DESIGN} => {HAND WARMER OWL DESIGN}**
+   - The rule suggests a 75% confidence that customers who buy Hand Warmers with a Scotty Dog Design will also buy those with an Owl Design. The lift of 7.6 suggests these customers are about 7.5 times more likely to buy Hand Warmers with an Owl Design compared to the average customer, which is a strong affinity but slightly less than the first rule.
+
+4. **{GARDENERS KNEELING PAD CUP OF TEA} => {GARDENERS KNEELING PAD KEEP CALM}**
+   - There's a 74.42% chance that customers who buy a Gardener's Kneeling Pad with a Cup of Tea design will also buy one with a Keep Calm design. The high lift value of 8.85 indicates that these two products are purchased together much more frequently than would be expected if they were independent of each other.
+
+5. **{HAND WARMER RED LOVE HEART} => {HAND WARMER OWL DESIGN}**
+   - Customers who purchase a Hand Warmer with a Red Love Heart design have a 72.73% probability of also purchasing a Hand Warmer with an Owl Design. The lift of 7.37 means that the presence of a Red Love Heart design has a strong influence on the purchase of the Owl Design, more than 7 times the average likelihood.
+
+These top 5 rules suggest that Hand Warmers with different designs are frequently purchased together, possibly as gifts or collectibles. The Gardener's Kneeling Pads also show a strong cross-purchase pattern, indicating that customers may like to collect or give matching sets. 
+
+
+## Recency ,Frequency ,Monetary
+RFM (Recency, Frequency, Monetary) analysis is a marketing technique for analyzing customer value based on past purchasing behavior. Here are the basic aspects of RFM:
+
+* Recency (R): Refers to how recently a customer made a purchase. A more recent purchase scores higher because recent customers are more likely to respond to new offers.
+
+* Frequency (F): Indicates how often a customer makes a purchase within a given time frame. Frequent buyers are often more engaged and potentially more profitable.
+
+* Monetary (M): Reflects how much money a customer spends over a period of time. Customers who spend more are often considered more valuable.
+
+```{r warning=FALSE}
+
+cleaned_data$InvoiceDate <- as.Date(cleaned_data$InvoiceDate)
+
+#Monetary value for each transaction
+cleaned_data$MonetaryValue <- cleaned_data$Quantity * cleaned_data$UnitPrice
+
+#most recent date in our dataset for recency calculation
+most_recent_date <- max(cleaned_data$InvoiceDate) + 1
+
+# RFM analysis
+rfm_data <- cleaned_data %>%
+  group_by(CustomerID) %>%
+  summarise(
+    Recency = as.numeric(difftime(most_recent_date, max(InvoiceDate), units = "days")),
+    Frequency = n(),
+    Monetary = sum(MonetaryValue)
+  )
+
+
+head(rfm_data)
+
+rfm_data <- rfm_data %>%
+  mutate(
+    R_Score = ntile(Recency, 4),
+    F_Score = ntile(Frequency, 4),
+    M_Score = ntile(Monetary, 4)
+  )
+
+
+head(rfm_data)
+
+
+
+```
+
+* RFM helps segment customers into groups for targeted marketing based on their RFM scores, here we gonna segment it as "Hibernating","Loyal customer" , "other", "cant lose them" and " High value customers"
+```{r}
+
+assign_segment <- function(r_score, f_score, m_score) {
+  if (r_score >= 3 & f_score >= 3 & m_score >= 3) {
+    return('High-Value Customers')
+  } else if (f_score >= 3) {
+    return('Loyal Customers')
+  } else if (r_score <= 1 & (f_score >= 2 | m_score >= 2)) {
+    return('At Risk')
+  } else if (r_score <= 1 & f_score <= 1 & m_score >= 3) {
+    return('Can’t Lose Them')
+  } else if (r_score <= 1 & f_score <= 1 & m_score <= 1) {
+    return('Hibernating')
+  } else {
+    return('Other')
+  }
+}
+
+rfm_data$Segment <- apply(rfm_data, 1, function(x) assign_segment(x['R_Score'], x['F_Score'], x['M_Score']))
+
+
+head(rfm_data)
+
+
+```
+```{r}
+# Selecting only 'Monetary', 'Frequency', and 'Recency' columns
+rfm_df <- rfm_data %>%
+  select(Monetary, Frequency, Recency)
+
+head(rfm_df)
+
+```
+## Elbow Plot
+
+This graph is known as  "elbow plot," which is commonly used to determine the optimal number of clusters in K-means clustering, a type of unsupervised machine learning algorithm. This graph plots the total within-cluster sum of squares (WSS) against the number of clusters K.
+```{r}
+
+
+rfm_scaled <- scale(rfm_df)
+
+# Elbow Method
+wss <- sapply(1:10, function(k){
+  kmeans(rfm_scaled, centers = k, nstart = 20)$tot.withinss
+})
+plot(1:10, wss, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters K", ylab = "Total within-clusters sum of squares")
+
+```
+
+The "elbow" of the plot, where the rate of decrease sharply changes, suggests the optimal number of clusters to use.
+In this case for cleaned_data , the elbow appears to be at K=4, suggesting that 4 is the optimal number of clusters for our dataset.
+Now lets cluster the dataset using K-means clustering
+
+## K - Means Clustering
+ 
+K-means clustering is an unsupervised learning algorithm that groups data into K distinct clusters based on feature similarity. The process involves:
+
+* Selecting K initial centroids (mean points).
+* Assigning each data point to the nearest centroid.
+* Recalculating centroids based on the assigned points.
+* Iterating the assignment and recalculations until centroids stabilize.
+* Determining the optimal K usually requires methods like the elbow technique.
+
+```{r warning=FALSE}
+#  k-means clustering
+
+num_clusters <- 4
+set.seed(111) 
+kmeans_result <- kmeans(rfm_scaled, centers = num_clusters, nstart = 25)
+
+
+rfm_df$Cluster <- kmeans_result$cluster
+
+
+head(rfm_df)
+
+
+
+cluster_summary <- rfm_df %>%
+  group_by(Cluster) %>%
+  summarise(
+    Avg_Recency = mean(Recency),
+    Avg_Frequency = mean(Frequency),
+    Avg_Monetary = mean(Monetary),
+    .groups = 'drop'
+  )
+
+
+print(cluster_summary)
+
+
+
+```
+
+```{r}
+# Recency
+ggplot(rfm_df, aes(x = factor(Cluster), y = Recency)) +
+  geom_boxplot() +
+  labs(title = "Recency by Cluster", x = "Cluster", y = "Recency")
+```
+* Clusters 1 and 2 show a tighter and lower range of recency days, which means customers in these clusters have made purchases more recently. Cluster 3 shows a wider range, indicating a mix of recent and less recent purchases. Cluster 4 has the highest recency values, suggesting that customers in this cluster have  made purchases recently
+```{r}
+# Frequency
+ggplot(rfm_df, aes(x = factor(Cluster), y = Frequency)) +
+  geom_boxplot() +
+  labs(title = "Frequency by Cluster", x = "Cluster", y = "Frequency")
+```
+* Clusters 1, 2, and 3 show low frequency with a tight distribution, indicating these customers purchase less frequently. Cluster 4, similar to the monetary value, has a very high frequency range, indicating that customers in this cluster purchase more frequently.
+
+```{r}
+
+# Monetary
+ggplot(rfm_df, aes(x = factor(Cluster), y = Monetary)) +
+  geom_boxplot() +
+  labs(title = "Monetary by Cluster", x = "Cluster", y = "Monetary")
+
+
+```
+
+* Clusters 1, 2, and 3 have a relatively low and tight distribution of monetary values, indicating these clusters comprise customers with lower monetary contributions. Cluster 4 has a much higher range, suggesting it contains customers who contribute significantly more in monetary terms.
+
+***Cluster 4 stands out as having customers with the highest monetary contribution and purchase frequency but the least recent interactions. This cluster could be high-value but at-risk customers. In contrast, Clusters 1, 2, and 3 might represent various segments of lower-value customers who have either made recent purchases (1 and 2) or have a mix of recent and less recent transactions (3). These insights can help businesses tailor their marketing strategies and customer engagement efforts accordingly***
